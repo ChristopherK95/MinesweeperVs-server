@@ -1,5 +1,14 @@
 import { ConnectedSocket, OnConnect, MessageBody, OnMessage, SocketController, SocketIO } from "socket-controllers";
 import { Socket, Server } from "socket.io";
+import {ClientsDB} from "../../data/players";
+
+interface Event {
+  user: string;
+  info: {
+    position: { x:number, y:number},
+    score: number;
+  }
+}
 
 interface Tile {
   clicked: boolean;
@@ -20,88 +29,100 @@ export class GameController {
   }
 
   @OnMessage("prepare_game")
-  public startGame(@SocketIO() io: Server, @ConnectedSocket() socket: Socket, @MessageBody() message: {bombs: number, tileAmount: number}) {
-    var tilesSet = false;
+  public startGame(@SocketIO() io: Server, @ConnectedSocket() socket: Socket, @MessageBody() message: {bombs: number, tileAmount: number, id: number, tileArr: Tile[]}) {
+    const gameRoom = this.getSocketGameRoom(socket);
     const tileAmount = message.tileAmount;
+    const tileArr = message.tileArr;
+    const id = message.id;
     var max = tileAmount - 1;
-    var tileArray: Array<Tile> = [];
-    var id = 0;
     const lower = Math.floor(0.2 * tileAmount);
     const higher = Math.floor(0.6 * tileAmount)
-    console.log(message)
-    for (let i = 0; i < tileAmount; i++) {
-      for (let j = 0; j < tileAmount; j++) {
-        let tile: Tile = { clicked: false, id: id, position: { x: j, y: i }, mine: false, count: 0, flagged: false };
-        tileArray.push(tile);
-        id++;
-      }
-    }
 
-    putBombs();
+    putBombs(id);
     calcNearbyMines();
-    socket.emit("game_setup", tileArray);
+    
+    const score: number = tileArr[id].mine
+    ? -5
+    : tileArr[id].count === 0
+    ? 3
+    : tileArr[id].count;
+    const event: Event = {
+      user: ClientsDB.getPlayer(socket.id).name,
+      info: {
+        position: { x: tileArr[id].position.x, y: tileArr[id].position.y },
+        score: score,
+      },
+    };
+    checkNearbyEmpty(id, tileArr);
 
-    function putBombs() {
+    socket.emit("game_setup1", {tileArr, score, event});
+    socket.to(gameRoom).emit("game_setup2", {tileArr, score, event});
+
+    function putBombs(id: number) {
       var mines = message.bombs;
-      for (var i = 0; i < tileArray.length; i++) {
+      for (var i = 0; i < tileArr.length; i++) {
         if (mines === 0) return;
+        if(i === id) {
+          tileArr[i].clicked = true;
+          continue;
+        }
         var mine = Math.random();
-        if ((tileArray[i].position.x < lower && tileArray[i].position.y < lower || (tileArray[i].position.x > higher && tileArray[i].position.y < higher)) || (tileArray[i].position.x < lower && tileArray[i].position.y > higher) || (tileArray[i].position.x > higher && tileArray[i].position.y < lower)) {
-          if (mine > 0.7 && tileArray[i].mine === false) {
-            tileArray[i].mine = true;
+        if ((tileArr[i].position.x < lower && tileArr[i].position.y < lower || (tileArr[i].position.x > higher && tileArr[i].position.y < higher)) || (tileArr[i].position.x < lower && tileArr[i].position.y > higher) || (tileArr[i].position.x > higher && tileArr[i].position.y < lower)) {
+          if (mine > 0.7 && tileArr[i].mine === false) {
+            tileArr[i].mine = true;
             mines--;
           }
         }
         else {
-          if (mine > 0.9 && tileArray[i].mine === false) {
-            tileArray[i].mine = true;
+          if (mine > 0.9 && tileArr[i].mine === false) {
+            tileArr[i].mine = true;
             mines--;
           }
         }
 
-        if (i === tileArray.length - 1 && mines > 0) i = 0;
+        if (i === tileArr.length - 1 && mines > 0) i = 0;
       }
     }
 
     function calcNearbyMines() {
-      for (var i = 0; i < tileArray.length; i++) {
-        if (tileArray[i].mine === true) continue;
-        if (tileArray[i].position.x === 0 && tileArray[i].position.y === 0) {
-          tileArray[i].count = calcCorners(0, 0, i);
+      for (var i = 0; i < tileArr.length; i++) {
+        if (tileArr[i].mine === true) continue;
+        if (tileArr[i].position.x === 0 && tileArr[i].position.y === 0) {
+          tileArr[i].count = calcCorners(0, 0, i);
           continue;
         }
-        if (tileArray[i].position.x === max && tileArray[i].position.y === 0) {
-          tileArray[i].count = calcCorners(max, 0, i);
+        if (tileArr[i].position.x === max && tileArr[i].position.y === 0) {
+          tileArr[i].count = calcCorners(max, 0, i);
           continue;
         }
-        if (tileArray[i].position.x === 0 && tileArray[i].position.y === max) {
-          tileArray[i].count = calcCorners(0, max, i);
+        if (tileArr[i].position.x === 0 && tileArr[i].position.y === max) {
+          tileArr[i].count = calcCorners(0, max, i);
           continue;
         }
-        if (tileArray[i].position.x === max && tileArray[i].position.y === max) {
-          tileArray[i].count = calcCorners(max, max, i);
-          continue;
-        }
-
-        if (tileArray[i].position.x === 0 || tileArray[i].position.x === max || tileArray[i].position.y === 0 || tileArray[i].position.y === max) {
-          tileArray[i].count = calcOuter(tileArray[i].position.x, tileArray[i].position.y, i);
+        if (tileArr[i].position.x === max && tileArr[i].position.y === max) {
+          tileArr[i].count = calcCorners(max, max, i);
           continue;
         }
 
-        tileArray[i].count = calcInner(i);
+        if (tileArr[i].position.x === 0 || tileArr[i].position.x === max || tileArr[i].position.y === 0 || tileArr[i].position.y === max) {
+          tileArr[i].count = calcOuter(tileArr[i].position.x, tileArr[i].position.y, i);
+          continue;
+        }
+
+        tileArr[i].count = calcInner(i);
       }
     }
 
     function calcInner(id) {
       var count = 0;
-      if (tileArray[id - 1].mine === true) count++;
-      if (tileArray[id + 1].mine === true) count++;
-      if (tileArray[id + tileAmount].mine === true) count++;
-      if (tileArray[id - tileAmount].mine === true) count++;
-      if (tileArray[id - tileAmount - 1].mine === true) count++;
-      if (tileArray[id - tileAmount + 1].mine === true) count++;
-      if (tileArray[id + tileAmount - 1].mine === true) count++;
-      if (tileArray[id + tileAmount + 1].mine === true) count++;
+      if (tileArr[id - 1].mine === true) count++;
+      if (tileArr[id + 1].mine === true) count++;
+      if (tileArr[id + tileAmount].mine === true) count++;
+      if (tileArr[id - tileAmount].mine === true) count++;
+      if (tileArr[id - tileAmount - 1].mine === true) count++;
+      if (tileArr[id - tileAmount + 1].mine === true) count++;
+      if (tileArr[id + tileAmount - 1].mine === true) count++;
+      if (tileArr[id + tileAmount + 1].mine === true) count++;
       return count;
     }
 
@@ -109,35 +130,35 @@ export class GameController {
       var count = 0;
       // Leftmost tiles.
       if (x === 0) {
-        if (tileArray[id - tileAmount].mine === true) count++;
-        if (tileArray[id + 1].mine === true) count++;
-        if (tileArray[id + tileAmount].mine === true) count++;
-        if (tileArray[id - tileAmount + 1].mine === true) count++;
-        if (tileArray[id + tileAmount + 1].mine === true) count++;
+        if (tileArr[id - tileAmount].mine === true) count++;
+        if (tileArr[id + 1].mine === true) count++;
+        if (tileArr[id + tileAmount].mine === true) count++;
+        if (tileArr[id - tileAmount + 1].mine === true) count++;
+        if (tileArr[id + tileAmount + 1].mine === true) count++;
       }
       // Rightmost tiles.
       else if (x === max) {
-        if (tileArray[id - tileAmount].mine === true) count++;
-        if (tileArray[id - 1].mine === true) count++;
-        if (tileArray[id + tileAmount].mine === true) count++;
-        if (tileArray[id - tileAmount - 1].mine === true) count++;
-        if (tileArray[id + tileAmount - 1].mine === true) count++;
+        if (tileArr[id - tileAmount].mine === true) count++;
+        if (tileArr[id - 1].mine === true) count++;
+        if (tileArr[id + tileAmount].mine === true) count++;
+        if (tileArr[id - tileAmount - 1].mine === true) count++;
+        if (tileArr[id + tileAmount - 1].mine === true) count++;
       }
       // Top tiles.
       else if (y === 0) {
-        if (tileArray[id - 1].mine === true) count++;
-        if (tileArray[id + 1].mine === true) count++;
-        if (tileArray[id + tileAmount].mine === true) count++;
-        if (tileArray[id + tileAmount - 1].mine === true) count++;
-        if (tileArray[id + tileAmount + 1].mine === true) count++;
+        if (tileArr[id - 1].mine === true) count++;
+        if (tileArr[id + 1].mine === true) count++;
+        if (tileArr[id + tileAmount].mine === true) count++;
+        if (tileArr[id + tileAmount - 1].mine === true) count++;
+        if (tileArr[id + tileAmount + 1].mine === true) count++;
       }
       // Bottom tiles.
       else {
-        if (tileArray[id - 1].mine === true) count++;
-        if (tileArray[id + 1].mine === true) count++;
-        if (tileArray[id - tileAmount].mine === true) count++;
-        if (tileArray[id - tileAmount - 1].mine === true) count++;
-        if (tileArray[id - tileAmount + 1].mine === true) count++;
+        if (tileArr[id - 1].mine === true) count++;
+        if (tileArr[id + 1].mine === true) count++;
+        if (tileArr[id - tileAmount].mine === true) count++;
+        if (tileArr[id - tileAmount - 1].mine === true) count++;
+        if (tileArr[id - tileAmount + 1].mine === true) count++;
       }
       return count;
     }
@@ -146,32 +167,126 @@ export class GameController {
       var count = 0;
       // Top left corner.
       if (x === 0 && y === 0) {
-        if (tileArray[id + 1].mine === true) count++;
-        if (tileArray[id + tileAmount].mine === true) count++;
-        if (tileArray[id + tileAmount + 1].mine === true) count++;
+        if (tileArr[id + 1].mine === true) count++;
+        if (tileArr[id + tileAmount].mine === true) count++;
+        if (tileArr[id + tileAmount + 1].mine === true) count++;
         return count;
       }
       // Top right corner.
       else if (x !== 0 && y === 0) {
-        if (tileArray[id - 1].mine === true) count++;
-        if (tileArray[id + tileAmount].mine === true) count++;
-        if (tileArray[id + tileAmount - 1].mine === true) count++;
+        if (tileArr[id - 1].mine === true) count++;
+        if (tileArr[id + tileAmount].mine === true) count++;
+        if (tileArr[id + tileAmount - 1].mine === true) count++;
         return count;
       }
       // Bottom left corner.
       else if (y !== 0 && x === 0) {
-        if (tileArray[id - tileAmount].mine === true) count++;
-        if (tileArray[id - 1].mine === true) count++;
-        if (tileArray[id - tileAmount + 1].mine === true) count++;
+        if (tileArr[id - tileAmount].mine === true) count++;
+        if (tileArr[id - 1].mine === true) count++;
+        if (tileArr[id - tileAmount + 1].mine === true) count++;
         return count;
       }
       // Bottom right corner.
       else {
-        if (tileArray[id - tileAmount].mine === true) count++;
-        if (tileArray[id - tileAmount - 1].mine === true) count++;
-        if (tileArray[id - 1].mine === true) count++;
+        if (tileArr[id - tileAmount].mine === true) count++;
+        if (tileArr[id - tileAmount - 1].mine === true) count++;
+        if (tileArr[id - 1].mine === true) count++;
         return count;
       }
+    }
+
+    function checkNearbyEmpty(id: number, arr: Tile[]) {
+      // Checks left tile.
+      if (
+        arr[id - 1] &&
+        arr[id].position.x !== 0 &&
+        arr[id - 1].mine === false &&
+        arr[id - 1].clicked === false
+      ) {
+        arr[id - 1].clicked = true;
+        if (arr[id - 1].count === 0) checkNearbyEmpty(id - 1, arr);
+      }
+      // Checks right tile.
+      if (
+        arr[id + 1] &&
+        arr[id].position.x !== max &&
+        arr[id + 1].mine === false &&
+        arr[id + 1].clicked === false
+      ) {
+        arr[id + 1].clicked = true;
+        if (arr[id + 1].count === 0) checkNearbyEmpty(id + 1, arr);
+      }
+      // Checks tile above.
+      if (
+        arr[id - tileAmount] &&
+        arr[id].position.y !== 0 &&
+        arr[id - tileAmount].mine === false &&
+        arr[id - tileAmount].clicked === false
+      ) {
+        arr[id - tileAmount].clicked = true;
+        if (arr[id - tileAmount].count === 0)
+          checkNearbyEmpty(id - tileAmount, arr);
+      }
+      // Checks tile below.
+      if (
+        arr[id + tileAmount] &&
+        arr[id].position.y !== max &&
+        arr[id + tileAmount].mine === false &&
+        arr[id + tileAmount].clicked === false
+      ) {
+        arr[id + tileAmount].clicked = true;
+        if (arr[id + tileAmount].count === 0)
+          checkNearbyEmpty(id + tileAmount, arr);
+      }
+      // Checks upper left tile.
+      if (
+        arr[id - tileAmount - 1] &&
+        arr[id].position.y !== 0 &&
+        arr[id].position.x !== 0 &&
+        arr[id - tileAmount - 1].mine === false &&
+        arr[id - tileAmount - 1].clicked === false
+      ) {
+        arr[id - tileAmount - 1].clicked = true;
+        if (arr[id - tileAmount - 1].count === 0)
+          checkNearbyEmpty(id - tileAmount - 1, arr);
+      }
+      // Checks upper right tile.
+      if (
+        arr[id - tileAmount + 1] &&
+        arr[id].position.y !== 0 &&
+        arr[id].position.x !== max &&
+        arr[id - tileAmount + 1].mine === false &&
+        arr[id - tileAmount + 1].clicked === false
+      ) {
+        arr[id - tileAmount + 1].clicked = true;
+        if (arr[id - tileAmount + 1].count === 0)
+          checkNearbyEmpty(id - tileAmount + 1, arr);
+      }
+      // Checks lower left tile.
+      if (
+        arr[id + tileAmount - 1] &&
+        arr[id].position.y !== max &&
+        arr[id].position.x !== 0 &&
+        arr[id + tileAmount - 1].mine === false &&
+        arr[id + tileAmount - 1].clicked === false
+      ) {
+        arr[id + tileAmount - 1].clicked = true;
+        if (arr[id + tileAmount - 1].count === 0)
+          checkNearbyEmpty(id + tileAmount - 1, arr);
+      }
+      // Checks lower right tile.
+      if (
+        arr[id + tileAmount + 1] &&
+        arr[id].position.y !== max &&
+        arr[id].position.x !== max &&
+        arr[id + tileAmount + 1].mine === false &&
+        arr[id + tileAmount + 1].clicked === false
+      ) {
+        arr[id + tileAmount + 1].clicked = true;
+        if (arr[id + tileAmount + 1].count === 0)
+          checkNearbyEmpty(id + tileAmount + 1, arr);
+      }
+      return arr;
     }
 
   }

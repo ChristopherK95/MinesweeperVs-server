@@ -25,8 +25,8 @@ export class RoomController {
     }
     const roomId: string = message.roomId;
     const settings: Settings = {
-      tileAmount: 15,
-      totalBombs: 30,
+      tileAmount: 12,
+      totalBombs: 50,
       roundTimeSetting: 30
     }
     const players: string[] = [];
